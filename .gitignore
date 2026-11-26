@@ -31,3 +31,16 @@ KMS
 
 # GitHub CLI
 .github/personal-instructions.md
+
+# Credentials
+*.pem
+*.key
+credentials.json
+secrets.*
+
+# Local agent tooling and LiveKit deployment link
+.agents/
+.gemini/
+opencode.json
+skills-lock.json
+livekit.toml

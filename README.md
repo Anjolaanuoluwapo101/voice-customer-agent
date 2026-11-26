@@ -2,81 +2,116 @@
   <img src="./.github/assets/livekit-mark.png" alt="LiveKit logo" width="100" height="100">
 </a>
 
-# LiveKit Agents starter for Python
+# Voice Customer Agent
 
-A starter project for building voice AI apps with [LiveKit Agents for Python](https://github.com/livekit/agents) and [LiveKit Cloud](https://cloud.livekit.io/).
+A customer-facing voice agent for businesses, built with [LiveKit Agents for Python](https://github.com/livekit/agents) and [LiveKit Cloud](https://cloud.livekit.io/). Callers talk to it over the phone (SIP). It answers questions from a knowledge base, manages appointments, checks ticket status and takes messages.
 
-## Getting started
+The agent core is business-agnostic. Everything specific to one business lives in a profile under `src/profiles/`: the facts the agent answers from, extra rules and guardrails, speech-recognition keyterms, time zone and currency. Choose one with `BUSINESS_PROFILE`. The default is `generic`, and `aj_hospital` is the first business the agent was tuned for.
 
-1. Install [uv](https://docs.astral.sh/uv/getting-started/installation/), which manages Python and the project's dependencies.
+To adapt it to another business, copy `src/profiles/generic.py` to `src/profiles/<name>.py`, fill in the fields, and set `BUSINESS_PROFILE=<name>`.
 
-1. Install the [LiveKit CLI](https://docs.livekit.io/intro/basics/cli/) and sign in to LiveKit Cloud:
+## What it does
 
-   - **macOS:** `brew install livekit-cli`
-   - **Linux:** `curl -sSL https://get.livekit.io/cli | bash`
-   - **Windows:** `winget install LiveKit.LiveKitCLI`
+- Answers questions about the business, such as services, hours, insurance and location.
+- Books, reschedules and cancels appointments.
+- Checks the status of an order or ticket.
+- Takes messages for staff.
+- Recognizes returning callers by their phone number and greets them by first name.
 
-   Sign up for a free [LiveKit Cloud](https://cloud.livekit.io/) account if you don't have one, then link it to the CLI:
+Built-in guardrails: it never shares confidential figures, only discusses the caller's own records, ignores instructions from callers that try to change its rules, and cannot transfer calls. Domain rules, such as medical safety in `aj_hospital`, come from the profile.
 
-   ```console
-   lk cloud auth
-   ```
+## How it works
 
-1. Create your project from this starter:
+The agent is a thin voice layer. Business logic lives in [n8n](https://n8n.io/) webhooks, and the agent calls them over HTTP with an `X-API-Key` header.
 
-   ```console
-   lk agent init my-agent --template agent-starter-python
-   ```
+- **Greeting:** when a call starts, the agent looks up the caller by SIP phone number and speaks a scripted greeting. A known caller is welcomed back by first name.
+- **Retries:** read-only webhooks (`lookup-caller`, `ticket-status`, `check-availability`, `ask-knowledge`) are retried once. Writes are never retried, so a slow response can't create a duplicate booking.
+- **Warm-up:** at the start of each call the agent pings the n8n `/healthz` endpoint, because free-tier hosting can sleep.
+- **Fillers:** if a tool takes longer than 0.8 seconds, the agent speaks a short filler line.
+- **Limits:** calls are capped at `MAX_CALL_SECONDS`. If the caller goes silent, the agent asks once and ends the call on the second silence.
+- **Call log:** when the call ends, the agent sends the transcript, an LLM-written summary, the outcome, the duration and a follow-up flag to the n8n `log-call` webhook.
 
-1. Talk to your agent. Run it in your terminal and speak into your microphone:
+### Tools
 
-   ```console
-   cd my-agent
-   lk agent console
-   ```
+| Tool | What it does |
+|---|---|
+| `ask_knowledge` | Searches the business knowledge base |
+| `check_availability` | Checks open appointment slots |
+| `book_appointment` | Books an appointment |
+| `send_details_link` | Sends the caller a details link |
+| `manage_booking` | Lists, cancels or reschedules bookings |
+| `check_ticket_status` | Looks up an order or ticket |
+| `save_message` | Saves a message or lead for staff |
+| `end_call` | Ends the call after speech finishes playing |
 
-   If you didn't let `lk agent init` install dependencies, run `uv sync` first.
+### Knowledge search
 
-## What's included
+`ask_knowledge` embeds the question with Gemini (`gemini-embedding-001`) and queries a [Qdrant](https://qdrant.tech/) collection. Chunks from files listed in `KNOWLEDGE_BLOCKED_FILES` are filtered out in code. If Gemini or Qdrant isn't configured, it falls back to the n8n `ask-knowledge` webhook.
 
-The starter includes:
+### Voice pipeline
 
-- A simple [voice AI assistant](https://docs.livekit.io/agents/start/voice-ai/) to extend and customize.
-- A voice pipeline built on [LiveKit Inference](https://docs.livekit.io/agents/models/inference/), which gives you access to [models](https://docs.livekit.io/agents/models/) from top labs with no extra configuration:
-  - The default LLM is Gemma 4 31B, an open-weight model [hosted by LiveKit](https://docs.livekit.io/agents/models/llm/livekit/) and tuned for voice AI.
-  - The default TTS is [Fish Audio S2.1 Pro](https://docs.livekit.io/agents/models/tts/fishaudio/), an expressive and cost-effective voice.
-  - More than 50 other models are available from OpenAI, Cartesia, Deepgram, and other providers.
-  - [Realtime models](https://docs.livekit.io/agents/models/realtime/) such as OpenAI GPT-Live. Many other models are available through the [plugin ecosystem](https://docs.livekit.io/agents/models/#plugins).
-- [Expressive mode](https://docs.livekit.io/agents/models/tts/expressive/), on by default, so your agent's voice carries emotion and pacing that fit the conversation.
-- [Keyterms](https://docs.livekit.io/agents/models/stt/keyterms/), on by default, so speech recognition gets your names, brands, and jargon right, including names it picks up during the conversation, like a caller's.
-- [LiveKit Turn Detector](https://docs.livekit.io/agents/logic/turns/turn-detector/), which knows when the user has finished speaking, in 14 languages.
-- [Adaptive interruption handling](https://docs.livekit.io/agents/logic/turns/adaptive-interruption-handling/), which tells a real interruption from an "uh-huh" or background noise, so your agent doesn't stop talking when it shouldn't.
-- [Background voice cancellation](https://docs.livekit.io/transport/media/noise-cancellation/).
-- Session transcripts, traces, and recordings from LiveKit [Agent Observability](https://docs.livekit.io/testing/observability/).
-- [Simulations](https://docs.livekit.io/testing/simulations/) that test full conversations with your agent, run in CI on every merge to `main`.
-- A `Dockerfile` for [deploying to LiveKit Cloud](https://docs.livekit.io/deploy/agents/).
+Models run through [LiveKit Inference](https://docs.livekit.io/agents/models/inference/):
 
-The starter works with any [custom web or mobile frontend](https://docs.livekit.io/frontends/) or with [telephony](https://docs.livekit.io/telephony/).
+- **STT:** AssemblyAI realtime, with keyterms for staff names and medical terms.
+- **LLM:** `google/gemma-4-31b-it` by default. Override it with `LLM_MODEL`.
+- **TTS:** Fish Audio S2.1 Pro, in [expressive mode](https://docs.livekit.io/agents/models/tts/expressive/).
+- **Turn detection:** [LiveKit Turn Detector](https://docs.livekit.io/agents/logic/turns/turn-detector/), with preemptive generation on.
+- **Noise cancellation:** [ai-coustics](https://docs.livekit.io/transport/media/noise-cancellation/) audio enhancement.
+
+## Requirements
+
+- [uv](https://docs.astral.sh/uv/getting-started/installation/). It manages Python (3.10 to 3.14) and the dependencies.
+- The [LiveKit CLI](https://docs.livekit.io/intro/basics/cli/) and a LiveKit Cloud account.
+- An n8n instance that exposes the webhooks listed above.
+- Optional: a Gemini API key and a Qdrant instance, for direct knowledge search.
+- A SIP trunk, to take real phone calls. See the [telephony docs](https://docs.livekit.io/telephony/).
+
+## Configuration
+
+For local runs, put these in `.env.local`, which is gitignored. For a deployed agent, set them as LiveKit secrets.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` | none | LiveKit Cloud credentials |
+| `N8N_BASE_URL` | none | Base URL of the n8n instance. If empty, n8n calls are skipped |
+| `BUSINESS_PROFILE` | `generic` | Which profile in `src/profiles/` to load (for example `aj_hospital`) |
+| `N8N_API_KEY` | none | Sent as `X-API-Key`. If empty, n8n calls are skipped |
+| `BUSINESS_NAME` | the profile's name | Name the agent uses for the business |
+| `AGENT_NAME` | `the virtual assistant` | Name the agent uses for itself |
+| `GEMINI_API_KEY` | none | Embeddings for direct knowledge search |
+| `QDRANT_URL`, `QDRANT_API_KEY` | none | Qdrant connection |
+| `QDRANT_COLLECTION` | `business_knowledge` | Qdrant collection to search |
+| `KNOWLEDGE_BLOCKED_FILES` | `Internal,Confidential` | Comma-separated source files never returned to callers |
+| `TTS_VOICE` | a Fish Audio voice ID | Voice used for speech |
+| `LLM_MODEL` | `google/gemma-4-31b-it` | LLM served through LiveKit Inference |
+| `MAX_CALL_SECONDS` | `600` | Maximum call length |
+| `USER_AWAY_SECONDS` | `20` | Silence before the agent checks the caller is still there |
 
 ## Run the agent
 
-The `lk agent console`, `lk agent dev`, and `lk agent debugger` commands run your agent on your own machine. To talk to it in your terminal:
+Install dependencies:
+
+```console
+uv sync
+```
+
+Talk to it in your terminal:
 
 ```console
 lk agent console
 ```
 
-To connect it to LiveKit Cloud so a frontend, a phone call, or the [Agent Console](https://docs.livekit.io/testing/agent-console/) can reach it:
+Connect it to LiveKit Cloud so a frontend or phone call can reach it:
 
 ```console
 lk agent dev
 ```
 
-To let a coding agent or a script test it one text turn at a time, use the [agent debugger](https://docs.livekit.io/testing/debugger/). Each turn prints the agent's reply along with the tool calls and handoffs behind it:
+Test one text turn at a time with the [agent debugger](https://docs.livekit.io/testing/debugger/). Each turn shows the reply and the tool calls behind it:
 
 ```console
 lk agent debugger start
-lk agent debugger say "Hi, what can you do?"
+lk agent debugger say "Hi, what are your opening hours?"
 lk agent debugger stop
 ```
 
@@ -86,63 +121,49 @@ In production, run the agent directly:
 uv run src/agent.py start
 ```
 
-## Frontends and telephony
+The agent registers under the name `my-agent`. That means it is dispatched explicitly, so for phone calls you need a SIP [dispatch rule](https://docs.livekit.io/telephony/accepting-calls/dispatch-rule/) that targets this agent name.
 
-Pair the agent with a prebuilt frontend starter, or add telephony:
+## Deploy
 
-| Platform | Link | Description |
-|----------|----------|-------------|
-| **Web** | [`livekit-examples/agent-starter-react`](https://github.com/livekit-examples/agent-starter-react) | Web voice AI assistant with React & Next.js |
-| **iOS/macOS** | [`livekit-examples/agent-starter-swift`](https://github.com/livekit-examples/agent-starter-swift) | Native iOS, macOS, and visionOS voice AI assistant |
-| **Flutter** | [`livekit-examples/agent-starter-flutter`](https://github.com/livekit-examples/agent-starter-flutter) | Cross-platform voice AI assistant app |
-| **React Native** | [`livekit-examples/voice-assistant-react-native`](https://github.com/livekit-examples/voice-assistant-react-native) | Native mobile app with React Native & Expo |
-| **Android** | [`livekit-examples/agent-starter-android`](https://github.com/livekit-examples/agent-starter-android) | Native Android app with Kotlin & Jetpack Compose |
-| **Web Embed** | [`livekit-examples/agent-starter-embed`](https://github.com/livekit-examples/agent-starter-embed) | Voice AI widget for any website |
-| **Telephony** | [Documentation](https://docs.livekit.io/telephony/) | Add inbound or outbound calling to your agent |
-
-For more options, see the [frontend guide](https://docs.livekit.io/frontends/).
-
-## Testing and debugging
-
-Simulations run full multi-turn conversations between a simulated user and your agent on LiveKit Cloud, then judge each transcript. The scenarios live in [`scenarios.yaml`](scenarios.yaml). Run them locally with the CLI:
+The `Dockerfile` builds a container that runs as a non-root user and downloads model files at build time. To deploy to LiveKit Cloud, see the [deployment guide](https://docs.livekit.io/deploy/agents/). To stream logs from the deployed agent:
 
 ```console
-lk agent simulate text --scenarios scenarios.yaml
+lk agent logs
 ```
 
-The `Simulations` workflow in [`.github/workflows/simulations.yml`](.github/workflows/simulations.yml) runs the same file on every merge to `main`, and on demand from the Actions tab. It doesn't run on every pull request push because each run uses real inference. See the [simulations guide](https://docs.livekit.io/testing/simulations/) for how to write scenarios and read results.
+## Testing
 
-To check a change turn by turn without a live session, use the [agent debugger](https://docs.livekit.io/testing/debugger/) shown in [Run the agent](#run-the-agent).
-
-To debug a running agent, open it in the [Agent Console](https://docs.livekit.io/testing/agent-console/). It shows events, tool calls, and model timing as you talk to the agent. To stream logs from a deployed agent, run `lk agent logs`.
-
-## Using coding agents
-
-This project works with coding agents like [Claude Code](https://claude.com/product/claude-code), [Cursor](https://www.cursor.com/), and [Codex](https://openai.com/codex/).
-
-**Agent skills.** Install LiveKit's [agent skills](https://docs.livekit.io/reference/developer-tools/agent-skills/), which teach your coding agent to build, debug, test, and deploy LiveKit agents:
+Simulations run full conversations between a simulated user and the agent, then judge the transcripts:
 
 ```console
-lk skills install
+lk agent simulate text --scenarios scenarios.yaml --yes
 ```
 
-To get the latest skills, run `lk skills update`.
+The `Simulations` workflow in `.github/workflows/simulations.yml` runs the same file on every merge to `main`. It needs `LIVEKIT_URL`, `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET` as repository secrets.
 
-**`AGENTS.md`.** Teaches your coding agent LiveKit's best practices for workflows, handoffs, and testing, and has it check its changes with the [agent debugger](https://docs.livekit.io/testing/debugger/).
+**Current gaps:** `scenarios.yaml` still contains the three generic starter scenarios, and none of them test booking, tickets, messages or confidentiality. `tests/test_agent.py` is fully commented out, so no pytest tests run. Add scenarios for your business flows before relying on CI to catch regressions.
 
-For more, see the [coding agents guide](https://docs.livekit.io/intro/coding-agents/).
+## Project layout
 
-## Using this template for your own project
+```
+src/agent.py            Agent, tools, and session setup
+src/profiles/           Per-business facts, rules and locale
+scenarios.yaml          Simulation scenarios
+tests/test_agent.py     Pytest tests (currently commented out)
+Dockerfile              Container for LiveKit Cloud
+livekit.toml            LiveKit Cloud project and agent link
+.github/workflows/      Lint and simulation CI
+AGENTS.md               Notes for coding agents
+```
 
-After you create your own project from this template:
+## Development
 
-- **Commit `uv.lock`.** The template doesn't track it, but your project should, for reproducible builds. If you deploy to LiveKit Cloud, commit `livekit.toml` too.
-- **Commit the agent skills** and `skills-lock.json`, if you installed them in the project.
-- **Add repository secrets.** Add `LIVEKIT_URL`, `LIVEKIT_API_KEY`, and `LIVEKIT_API_SECRET` as [repository secrets](https://docs.github.com/en/actions/how-tos/writing-workflows/choosing-what-your-workflow-does/using-secrets-in-github-actions) so the simulations can run in CI.
+Keep formatting and lint clean:
 
-## Deploying to production
-
-To deploy the agent to LiveKit Cloud, see the [deployment guide](https://docs.livekit.io/deploy/agents/).
+```console
+uv run ruff format
+uv run ruff check
+```
 
 ## License
 
