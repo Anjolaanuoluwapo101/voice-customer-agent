@@ -153,7 +153,6 @@ tests/test_agent.py     Pytest tests (currently commented out)
 Dockerfile              Container for LiveKit Cloud
 livekit.toml            LiveKit Cloud project and agent link
 .github/workflows/      Lint and simulation CI
-AGENTS.md               Notes for coding agents
 ```
 
 ## Development

@@ -44,3 +44,7 @@ secrets.*
 opencode.json
 skills-lock.json
 livekit.toml
+
+# Coding-agent instruction files (kept local)
+AGENTS.md
+CLAUDE.md
